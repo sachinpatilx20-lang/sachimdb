@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Movie Search & Saved</title>
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="manifest" href="manifest.json" />
+  <style>
+    body { background:#000; color:#fff; font-family:system-ui,sans-serif; margin:0; padding:12px; }
+    nav { margin-bottom:12px; }
+    nav a { color:#aaa; margin-right:14px; text-decoration:none; cursor:pointer; }
+    nav a.on { color:#fff; font-weight:bold; }
+    input[type=text] { width:100%; box-sizing:border-box; padding:10px; font-size:16px; background:#111; color:#fff; border:1px solid #333; border-radius:8px; margin-bottom:12px; }
+    .item { display:flex; gap:10px; align-items:center; padding:8px 0; border-bottom:1px solid #222; }
+    .item img { width:46px; height:66px; object-fit:cover; background:#222; border-radius:4px; flex-shrink:0; }
+    .item .t { flex:1; }
+    .item small { color:#999; display:block; }
+    button { background:#222; color:#fff; border:1px solid #444; border-radius:6px; padding:6px 10px; cursor:pointer; }
+    button:hover { background:#333; }
+    .hide { display:none; }
+    .msg { color:#777; padding:16px 0; font-size:14px; text-align:center; }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <a id="tabSearch" class="on" onclick="switchTab('search')">Search</a>
+    <a id="tabSaved" onclick="switchTab('saved')">Saved (<span id="savedCount">0</span>)</a>
+  </nav>
+
+  <!-- Search View -->
+  <div id="viewSearch">
+    <input type="text" id="query" placeholder="Search movies, series..." autocomplete="off" />
+    <div id="searchResults"></div>
+    <div id="searchMsg" class="msg">Type to search</div>
+  </div>
+
+  <!-- Saved View -->
+  <div id="viewSaved" class="hide">
+    <div id="savedResults"></div>
+    <div id="savedEmpty" class="msg hide">No saved items yet</div>
+  </div>
+
+  <script>
+    let saved = JSON.parse(localStorage.getItem('saved_items') || '[]');
+    let currentResults = [];
+    let debounceTimer = null;
+
+    const queryInput = document.getElementById('query');
+    const searchResults = document.getElementById('searchResults');
+    const savedResults = document.getElementById('savedResults');
+    const searchMsg = document.getElementById('searchMsg');
+    const savedEmpty = document.getElementById('savedEmpty');
+    const savedCount = document.getElementById('savedCount');
+
+    updateSavedCount();
+
+    function switchTab(tab) {
+      if (tab === 'search') {
+        document.getElementById('tabSearch').className = 'on';
+        document.getElementById('tabSaved').className = '';
+        document.getElementById('viewSearch').classList.remove('hide');
+        document.getElementById('viewSaved').classList.add('hide');
+      } else {
+        document.getElementById('tabSearch').className = '';
+        document.getElementById('tabSaved').className = 'on';
+        document.getElementById('viewSearch').classList.add('hide');
+        document.getElementById('viewSaved').classList.remove('hide');
+        renderSaved();
+      }
+    }
+
+    queryInput.addEventListener('input', (e) => {
+      clearTimeout(debounceTimer);
+      const q = e.target.value.trim();
+
+      if (!q) {
+        currentResults = [];
+        searchResults.innerHTML = '';
+        searchMsg.textContent = 'Type to search';
+        searchMsg.classList.remove('hide');
+        return;
+      }
+
+      debounceTimer = setTimeout(() => {
+        search(q);
+      }, 300);
+    });
+
+    function search(q) {
+      const clean = q.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      if (!clean) return;
+
+      const firstChar = clean.charAt(0);
+      const cbName = 'imdb$' + clean;
+
+      searchMsg.textContent = 'Searching...';
+      searchMsg.classList.remove('hide');
+
+      const cleanup = () => {
+        delete window[cbName];
+        if (script && script.parentNode) script.remove();
+      };
+
+      window[cbName] = (data) => {
+        cleanup();
+        searchMsg.classList.add('hide');
+        currentResults = (data && data.d) ? data.d : [];
+        if (currentResults.length === 0) {
+          searchResults.innerHTML = '';
+          searchMsg.textContent = 'No results found';
+          searchMsg.classList.remove('hide');
+        } else {
+          renderSearchResults();
+        }
+      };
+
+      const script = document.createElement('script');
+      script.src = `https://sg.media-imdb.com/suggests/${firstChar}/${clean}.json`;
+      script.onerror = () => {
+        cleanup();
+        searchResults.innerHTML = '';
+        searchMsg.textContent = 'Search failed';
+        searchMsg.classList.remove('hide');
+      };
+      document.body.appendChild(script);
+    }
+
+    function renderSearchResults() {
+      searchResults.innerHTML = currentResults.map(item => {
+        const id = item.id;
+        const title = item.l || 'Untitled';
+        const year = item.y ? item.y : '';
+        const role = item.s || '';
+        const img = item.i ? item.i[0] : '';
+        const isSaved = saved.some(s => s.id === id);
+
+        return `
+          <div class="item">
+            ${img ? `<img src="${img}" alt="" onerror="this.style.display='none'">` : '<div style="width:46px;height:66px;background:#222;border-radius:4px;flex-shrink:0;"></div>'}
+            <div class="t">
+              <div>${escapeHtml(title)}</div>
+              <small>${escapeHtml(year)} ${role ? '• ' + escapeHtml(role) : ''}</small>
+            </div>
+            <button onclick="toggleSave('${id}')">${isSaved ? 'Saved' : 'Save'}</button>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function toggleSave(id) {
+      const idx = saved.findIndex(s => s.id === id);
+      if (idx !== -1) {
+        saved.splice(idx, 1);
+      } else {
+        const item = currentResults.find(s => s.id === id);
+        if (item) {
+          saved.unshift({
+            id: item.id,
+            title: item.l || 'Untitled',
+            year: item.y || '',
+            role: item.s || '',
+            img: item.i ? item.i[0] : ''
+          });
+        }
+      }
+      localStorage.setItem('saved_items', JSON.stringify(saved));
+      updateSavedCount();
+      renderSearchResults();
+    }
+
+    function removeSaved(id) {
+      saved = saved.filter(s => s.id !== id);
+      localStorage.setItem('saved_items', JSON.stringify(saved));
+      updateSavedCount();
+      renderSaved();
+      renderSearchResults();
+    }
+
+    function renderSaved() {
+      if (saved.length === 0) {
+        savedResults.innerHTML = '';
+        savedEmpty.classList.remove('hide');
+        return;
+      }
+      savedEmpty.classList.add('hide');
+      savedResults.innerHTML = saved.map(item => `
+        <div class="item">
+          ${item.img ? `<img src="${item.img}" alt="" onerror="this.style.display='none'">` : '<div style="width:46px;height:66px;background:#222;border-radius:4px;flex-shrink:0;"></div>'}
+          <div class="t">
+            <div>${escapeHtml(item.title)}</div>
+            <small>${escapeHtml(item.year)} ${item.role ? '• ' + escapeHtml(item.role) : ''}</small>
+          </div>
+          <button onclick="removeSaved('${item.id}')">Remove</button>
+        </div>
+      `).join('');
+    }
+
+    function updateSavedCount() {
+      savedCount.textContent = saved.length;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>
